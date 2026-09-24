@@ -136,6 +136,51 @@ def main() -> int:
             "no error/partial fields on success",
         )
 
+    # --- 1b. costly branch before cheap relay chain (regression) --------
+    print("[1b] relay chain scanned after a costlier branch")
+    relay_payload = {
+        "nodes": ["A", "B", "X", "Y"],
+        "edges": [
+            edge("ax-2", "A", "X", 2),
+            edge("ay-1", "A", "Y", 1),
+            edge("yb-1", "Y", "B", 1),
+        ],
+        "endpoints": ["A", "B"],
+    }
+    status, body = request("POST", "/api/audit", relay_payload)
+    check(status == 200, "relay-chain status 200", str(body))
+    if status == 200:
+        check(body["cost"] == 2, "relay-chain cost 2",
+              f"got {body.get('cost')}")
+        check(
+            body["edge_set"] == ["ay-1", "yb-1"],
+            "canonical relay edge set",
+            str(body.get("edge_set")),
+        )
+        by_id = {e["id"]: e for e in body["edges"]}
+        check(set(by_id) == set(body["edge_set"]),
+              "edge details match edge_set", str(body["edges"]))
+        check(
+            sum(e["cost"] for e in body["edges"]) == body["cost"],
+            "edge details recompute cost",
+        )
+        adj = body["adjacency"]
+        check(set(adj) == {"A", "B", "Y"},
+              "adjacency spans used nodes only", str(adj))
+        round_trip = all(
+            any(
+                a["to"] == other and a["edge"] == eid
+                and a["cost"] == e["cost"]
+                for a in adj.get(src, [])
+            )
+            for eid, e in by_id.items()
+            for src, other in (
+                (e["source"], e["target"]),
+                (e["target"], e["source"]),
+            )
+        )
+        check(round_trip, "adjacency and edge details recompute each other")
+
     # --- 2. canonical tie arbitration ------------------------------------
     print("[2] tie arbitration -> lexicographically smallest witness")
     tie_payload = {

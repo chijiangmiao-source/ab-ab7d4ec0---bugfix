@@ -57,43 +57,6 @@ static int term[MAX_K];
 
 static ll dp[MAX_STATES][MAX_N];
 
-/* The greedy witness scan asks closely related feasibility questions.  Keep a
- * small process-local memo so dense equal-cost instances do not repeatedly
- * run the same terminal-subset closure. */
-#define ORACLE_MEMO_CAP 128
-typedef struct {
-    int used;
-    int component_count;
-    int terminal_count;
-    int feasible;
-} OracleMemo;
-static OracleMemo oracle_memo[ORACLE_MEMO_CAP];
-static unsigned oracle_memo_next;
-
-static int oracle_memo_lookup(int component_count, int terminal_count,
-                              int *feasible) {
-    for (int i = 0; i < ORACLE_MEMO_CAP; i++) {
-        OracleMemo *entry = &oracle_memo[i];
-        if (entry->used && entry->component_count == component_count &&
-                entry->terminal_count == terminal_count) {
-            *feasible = entry->feasible;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void oracle_memo_store(int component_count, int terminal_count,
-                              int feasible) {
-    OracleMemo *entry = &oracle_memo[
-        oracle_memo_next++ % ORACLE_MEMO_CAP
-    ];
-    entry->used = 1;
-    entry->component_count = component_count;
-    entry->terminal_count = terminal_count;
-    entry->feasible = feasible;
-}
-
 /* Forward-star graph rebuilt for every feasibility oracle. */
 typedef struct {
     int to;
@@ -325,9 +288,6 @@ static int can_extend(const char *required, const char *excluded, int extra,
         if (!seen) cterms[ck++] = c;
     }
 
-    int remembered;
-    if (oracle_memo_lookup(cn, ck, &remembered)) return remembered;
-
     /* Usable, non-excluded edges between distinct components become arcs. */
     memset(first, -1, sizeof(first));
     arc_count = 0;
@@ -348,13 +308,10 @@ static int can_extend(const char *required, const char *excluded, int extra,
     }
 
     if (ovf || tail >= INF) {
-        oracle_memo_store(cn, ck, 0);
         return 0;
     }
     ll total = add_sat(base, tail, &ovf);
-    int feasible = !ovf && total <= B;
-    oracle_memo_store(cn, ck, feasible);
-    return feasible;
+    return !ovf && total <= B;
 }
 
 int main(void) {

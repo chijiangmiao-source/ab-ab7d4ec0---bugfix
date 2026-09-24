@@ -215,6 +215,57 @@ class TestSolver:
         assert cost == 3
         assert set(ids) == {"ha", "hb", "hc"}
 
+    def test_costly_branch_scanned_before_cheap_relay_chain(self):
+        # Regression: in canonical (ascending id) order the scan first meets
+        # the cost-2 branch A-X, which cannot belong to the optimal subnet,
+        # and only afterwards the feasible low-cost relay chain A-Y, Y-B.
+        # The optimum must still be found and witnessed canonically.
+        nodes = ["A", "B", "X", "Y"]
+        edges = [
+            edge("ax-2", "A", "X", 2),
+            edge("ay-1", "A", "Y", 1),
+            edge("yb-1", "Y", "B", 1),
+        ]
+        p = make(nodes, edges, ["A", "B"])
+        cost, selected, ids = solve(p)
+        assert cost == 2
+        assert ids == ("ay-1", "yb-1")
+        assert sum(e.cost for e in selected) == cost
+        # The exported adjacency is induced exactly by the selected edges:
+        # the unused relay X must not appear, and every entry must be
+        # backed by a selected edge (the two views recompute each other).
+        adj = build_adjacency(p.nodes, selected)
+        assert set(adj) == {"A", "B", "Y"}
+        assert adj["A"] == [{"to": "Y", "edge": "ay-1", "cost": 1}]
+        assert adj["B"] == [{"to": "Y", "edge": "yb-1", "cost": 1}]
+        assert adj["Y"] == [
+            {"to": "A", "edge": "ay-1", "cost": 1},
+            {"to": "B", "edge": "yb-1", "cost": 1},
+        ]
+        by_id = {e.id: e for e in selected}
+        for node, entries in adj.items():
+            for entry in entries:
+                e = by_id[entry["edge"]]
+                assert {p.nodes[e.source], p.nodes[e.target]} == {
+                    node,
+                    entry["to"],
+                }
+                assert e.cost == entry["cost"]
+
+    def test_costly_branch_first_request_order_independent(self):
+        # Same topology as above with the request array shuffled: canonical
+        # order follows ascending edge ids, not the request array order.
+        nodes = ["A", "B", "X", "Y"]
+        edges = [
+            edge("yb-1", "Y", "B", 1),
+            edge("ax-2", "A", "X", 2),
+            edge("ay-1", "A", "Y", 1),
+        ]
+        p = make(nodes, edges, ["A", "B"])
+        cost, _, ids = solve(p)
+        assert cost == 2
+        assert ids == ("ay-1", "yb-1")
+
     def test_parallel_edge_cheapest_chosen(self):
         nodes = ["a", "b"]
         edges = [edge("a-exp", "a", "b", 9), edge("a-cheap", "a", "b", 2)]
