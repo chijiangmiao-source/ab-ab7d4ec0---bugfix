@@ -1,0 +1,19 @@
+.DS_Store
+.env
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.npm-cache/
+.pnpm-store/
+.yarn-cache/
+*.pyc
+*.pyo
+
+# Native core build output (built inside the Docker image; rebuilt locally
+# with: gcc -O2 -std=c11 -o core/steiner core/steiner.c)
+core/steiner
