@@ -260,6 +260,59 @@ class TestSolver:
         _, _, ids = solve(p)
         assert ids == ("e-x1", "e-x2")
 
+    def test_pricier_dead_end_branch_before_cheap_relay_chain(self):
+        # Regression: by edge-id order the scan first meets branch e1
+        # (A-X, cost 2), which no optimal subnet can contain, and only later
+        # the viable low-cost relay chain e2 (A-Y) + e3 (Y-B), cost 1 each.
+        # The oracle's decision for e1 must not poison the e2/e3 decisions.
+        nodes = ["A", "B", "X", "Y"]
+        edges = [
+            edge("e1", "A", "X", 2),
+            edge("e2", "A", "Y", 1),
+            edge("e3", "Y", "B", 1),
+        ]
+        p = make(nodes, edges, ["A", "B"])
+        cost, selected, ids = solve(p)
+        assert cost == 2
+        assert ids == ("e2", "e3")
+        assert [(e.id, e.cost) for e in selected] == [("e2", 1), ("e3", 1)]
+
+        # The exported edge details and the derived adjacency list must
+        # recompute each other exactly.
+        adj = build_adjacency(p.nodes, selected)
+        assert adj == {
+            "A": [{"to": "Y", "edge": "e2", "cost": 1}],
+            "B": [{"to": "Y", "edge": "e3", "cost": 1}],
+            "Y": [
+                {"to": "A", "edge": "e2", "cost": 1},
+                {"to": "B", "edge": "e3", "cost": 1},
+            ],
+        }
+        rebuilt = {
+            arc["edge"]: (label, arc["to"], arc["cost"])
+            for label, arcs in adj.items()
+            for arc in arcs
+            if label < arc["to"]  # each undirected edge appears twice
+        }
+        assert set(rebuilt) == set(ids)
+        assert sum(arc[2] for arc in rebuilt.values()) == cost
+
+    def test_pricier_dead_end_branch_request_order_independent(self):
+        # Same topology, request array shuffled: canonical (id) order drives
+        # the scan, so the witness is identical.
+        p = make(
+            ["A", "B", "X", "Y"],
+            [
+                edge("e3", "Y", "B", 1),
+                edge("e1", "A", "X", 2),
+                edge("e2", "A", "Y", 1),
+            ],
+            ["A", "B"],
+        )
+        cost, _, ids = solve(p)
+        assert cost == 2
+        assert ids == ("e2", "e3")
+
     def test_dangling_endpoint(self):
         p = make(["a", "b", "c"], [edge("e", "a", "b", 1)], ["a", "c"])
         with assert_raises(TopologyError) as ctx:

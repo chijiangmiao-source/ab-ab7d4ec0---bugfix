@@ -3,6 +3,8 @@
 Zero third-party dependencies (urllib only). Covers:
   * health probe,
   * a successful minimum-subnet solve with response consistency,
+  * a low-cost relay chain accepted after a pricier dead-end branch that
+    the canonical scan must reject first (oracle regression),
   * canonical tie arbitration (lexicographic edge ids, request-order stable),
   * infeasibility boundaries: dangling endpoint, split components,
   * stable locatable 4xx errors: malformed JSON, non-positive cost,
@@ -136,8 +138,57 @@ def main() -> int:
             "no error/partial fields on success",
         )
 
-    # --- 2. canonical tie arbitration ------------------------------------
-    print("[2] tie arbitration -> lexicographically smallest witness")
+    # --- 2. pricier dead-end branch scanned before the cheap relay chain ---
+    # Regression for the oracle-memo defect: by edge-id order the scan first
+    # rejects e1 (A-X, cost 2, can never join an optimal subnet) and must then
+    # still accept the low-cost relay chain e2 (A-Y) + e3 (Y-B).
+    print("[2] relay chain after pricier dead-end branch")
+    relay_payload = {
+        "nodes": ["A", "B", "X", "Y"],
+        "edges": [
+            edge("e1", "A", "X", 2),
+            edge("e2", "A", "Y", 1),
+            edge("e3", "Y", "B", 1),
+        ],
+        "endpoints": ["A", "B"],
+    }
+    status, body = request("POST", "/api/audit", relay_payload)
+    check(status == 200, "relay-chain status 200", str(body))
+    if status == 200:
+        check(body["cost"] == 2, "relay-chain cost 2",
+              f"got {body.get('cost')}")
+        check(body["edge_set"] == ["e2", "e3"], "canonical relay edge set",
+              str(body.get("edge_set")))
+        check(
+            body["edges"] == [
+                {"id": "e2", "source": "A", "target": "Y", "cost": 1},
+                {"id": "e3", "source": "Y", "target": "B", "cost": 1},
+            ],
+            "edge details",
+            str(body.get("edges")),
+        )
+        adj = body["adjacency"]
+        check(set(adj) == {"A", "B", "Y"},
+              "adjacency spans exactly the used nodes", str(adj))
+        # Adjacency and edge details must recompute each other.
+        derived = {}
+        for e in body["edges"]:
+            derived.setdefault(e["source"], []).append(
+                {"to": e["target"], "edge": e["id"], "cost": e["cost"]})
+            derived.setdefault(e["target"], []).append(
+                {"to": e["source"], "edge": e["id"], "cost": e["cost"]})
+        derived = {
+            label: sorted(arcs, key=lambda a: (a["to"], a["edge"]))
+            for label, arcs in sorted(derived.items())
+        }
+        check(adj == derived, "adjacency recomputed from edge details")
+        arc_cost = sum(a["cost"] for arcs in adj.values() for a in arcs)
+        check(arc_cost == 2 * body["cost"],
+              "adjacency costs recompute the total",
+              f"{arc_cost} != 2*{body['cost']}")
+
+    # --- 3. canonical tie arbitration ------------------------------------
+    print("[3] tie arbitration -> lexicographically smallest witness")
     tie_payload = {
         "nodes": ["a", "b", "c"],
         "edges": [
@@ -165,8 +216,8 @@ def main() -> int:
         str(body2),
     )
 
-    # --- 3. infeasibility boundaries -------------------------------------
-    print("[3] no-solution boundaries")
+    # --- 4. infeasibility boundaries -------------------------------------
+    print("[4] no-solution boundaries")
     status, body = request("POST", "/api/audit", {
         "nodes": ["A", "B", "C"],
         "edges": [edge("e1", "A", "B", 1)],
@@ -193,8 +244,8 @@ def main() -> int:
     check(body.get("pointer") == "/endpoints/1", "split pointer locatable",
           str(body.get("pointer")))
 
-    # --- 4. stable locatable 4xx errors ----------------------------------
-    print("[4] stable validation errors")
+    # --- 5. stable locatable 4xx errors ----------------------------------
+    print("[5] stable validation errors")
 
     status, body = request("POST", "/api/audit", raw=b"{not json")
     check(status == 400 and body.get("code") == "MALFORMED_JSON",
@@ -240,8 +291,8 @@ def main() -> int:
     status, body = request("GET", "/no-such-path")
     check(status == 404, "unknown path -> 404", f"got {status}")
 
-    # --- 5. no state leaks across requests --------------------------------
-    print("[5] request isolation")
+    # --- 6. no state leaks across requests --------------------------------
+    print("[6] request isolation")
     bad = {
         "nodes": ["A", "B"], "edges": [edge("e1", "A", "B", -3)],
         "endpoints": ["A", "B"],
